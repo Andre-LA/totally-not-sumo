@@ -1,27 +1,311 @@
-require "wasm4"
+--[[ This Source Code Form is subject to the terms of the Mozilla Public
+     License, v. 2.0. If a copy of the MPL was not distributed with this
+     file, You can obtain one at https://mozilla.org/MPL/2.0/. ]]
 
-local smiley: []uint8 = {
-  0b11000011,
-  0b10000001,
-  0b00100100,
-  0b00100100,
-  0b00000000,
-  0b00100100,
-  0b10011001,
-  0b11000011,
-};
+-- Disable GC and use 32-bit numbers by default
+## context.rootpragmas.nogc = true
+## primtypes.uinteger = primtypes.uint32
+## primtypes.integer = primtypes.int32
+## primtypes.number = primtypes.float32
 
-local function update(): void
-  $DRAW_COLORS = 2
-  text("Hello from Nelua!", 10, 10)
+-- require WASM-4 global API
+require 'wasm4'
+local math = require 'math'
 
-  local gamepad = $GAMEPAD1
-  if gamepad & BUTTON_1 ~= 0 then
-    $DRAW_COLORS = 4
+-- utility to track the size of each record
+##[[
+local function log_size(attr)
+  print(tostring(attr.value)..' size: '..attr.value.size..' bytes')
+end
+]]
+
+-- general types and methods --
+
+local Vec2 = @record{
+  x: int16, y: int16,
+}
+## log_size(Vec2)
+
+function Vec2.__add(a: Vec2, b: Vec2): Vec2
+  return Vec2{a.x + b.x, a.y + b.y}
+end
+
+function Vec2.__sub(a: Vec2, b: Vec2): Vec2
+  return Vec2{a.x - b.x, a.y - b.y}
+end
+
+local Hitbox = @record{
+  x: int16, y: int16, w: byte, h: byte
+}
+## log_size(Hitbox)
+
+function Hitbox.get_center(self: Hitbox): Vec2
+  return Vec2{
+    x = math.ifloor(self.x + self.w/2),
+    y = math.ifloor(self.y + self.h/2),
+  }
+end
+
+function Hitbox:with_offset(pos: Vec2): Hitbox
+  return Hitbox{self.x + pos.x, self.y + pos.y, self.w, self.h}
+end
+
+function Hitbox:is_point_intersecting(pt: *Vec2): boolean
+  return (
+    pt.x >= self.x and pt.x <= self.x + self.w and
+    pt.y >= self.y and pt.y <= self.y + self.h
+  )
+end
+
+function Hitbox:get_intersection(other: *Hitbox): (boolean, Hitbox)
+  local no_intersection = (
+    self.x + self.w < other.x or
+    self.x > other.x + other.w or
+    self.y > other.y + other.h or
+    self.y + self.h < other.y
+  )
+
+  if likely(no_intersection) then
+    return false, Hitbox{}
+  else
+    local p1x = math.max(self.x, other.x)
+    local p1y = math.max(self.y, other.y)
+
+    local p2x = math.min(self.x + self.w, other.x + other.w)
+    local p2y = math.min(self.y + self.h, other.y + other.h)
+
+    local w, h = math.abs(p2x - p1x), math.abs(p2y - p1y)
+
+    local intersection: Hitbox = { p1x, p1y, w, h }
+    return true, intersection
+  end
+end
+
+function Hitbox:get_intersection_with_offsets(self_pos: *Vec2, other: *Hitbox, other_pos: *Vec2): (boolean, Hitbox)
+  local self_hb, other_hb = self:with_offset(self_pos), other:with_offset(other_pos)
+  return self_hb:get_intersection(other_hb)
+end
+
+function Hitbox:simple_collision(entity_hb_o: Hitbox, entity_pos: *Vec2): boolean
+  local entity_hb = entity_hb_o:with_offset(entity_pos)
+  local is_intersecting, intersection = self:get_intersection(entity_hb)
+
+  if is_intersecting then
+    local self_center, entity_center = self:get_center(), entity_hb:get_center()
+
+    if intersection.w > intersection.h then
+      if self_center.y > entity_center.y then
+        entity_pos.y = self.y - entity_hb.h - entity_hb_o.y
+      else
+        entity_pos.y = self.y + self.h - entity_hb_o.y
+      end
+    elseif intersection.w < intersection.h then
+      if self_center.x > entity_center.x then
+        entity_pos.x = self.x - entity_hb.w - entity_hb_o.x
+      else
+        entity_pos.x = self.x + self.w - entity_hb_o.x
+      end
+    else
+      if self_center.y > entity_center.y then
+        entity_pos.y = self.y - entity_hb.h - entity_hb_o.y
+      else
+        entity_pos.y = self.y + self.h - entity_hb_o.y
+      end
+      if self_center.x > entity_center.x then
+        entity_pos.x = self.x - entity_hb.w - entity_hb_o.x
+      else
+        entity_pos.x = self.x + self.w - entity_hb_o.x
+      end
+    end
   end
 
-  blit(&smiley, 76, 76, 8, 8, BLIT_1BPP)
-  text("Press X! to blink", 16, 90)
+  return is_intersecting
+end
+
+local function draw_hitbox(hb: *Hitbox)
+  $DRAW_COLORS = 0x0033
+  rect(hb.x, hb.y, hb.w, hb.h)
+end
+
+-- entities --
+
+local CharacterState = @enum(byte){
+  Idle = 0, Walking, Attacking
+}
+
+local Character = @record{
+  hb_receiver: Hitbox,
+  hb_attacker: Hitbox,
+  pos: Vec2,
+  frames_on_state: int32,
+  state: CharacterState,
+  health_pts: int8,
+  controller: byte,
+}
+## log_size(Character)
+
+function Character.init(x: int16, y: int16, controller: byte): Character
+  return Character{
+    pos = { =x, =y },
+    hb_receiver = { 2,  2, 12, 12},
+    hb_attacker = controller == 1 and Hitbox{16, 4, 10, 7} or Hitbox{-10, 4, 10, 7},
+    =controller,
+  }
+end
+
+function Character:attacked_by(attacker: *Character)
+  local self_hb_center = self.hb_receiver:with_offset(self.pos):get_center()
+  local attacker_hb_center = attacker.hb_receiver:with_offset(attacker.pos):get_center()
+  local diff = self_hb_center - attacker_hb_center
+
+  if math.abs(diff.x) > math.abs(diff.y) then
+    self.pos.x = self.pos.x + 16 * math.sign(diff.x)
+  else
+    self.pos.y = self.pos.y + 16 * math.sign(diff.y)
+  end
+end
+
+-- game state --
+
+local GameState = @record{
+  characters: [4]Character,
+  walls: [16]Hitbox, -- TODO: clean unnecessary walls
+  prev_gamepad1: decltype($GAMEPAD1),
+  prev_gamepad2: decltype($GAMEPAD2),
+}
+## log_size(GameState)
+
+function GameState:player_try_hit(attacker: *Character)
+  for i = 0, < #self.characters do
+    if (attacker.hb_attacker:get_intersection_with_offsets(attacker.pos, self.characters[i].hb_receiver, self.characters[i].pos)) then
+      self.characters[i]:attacked_by(attacker)
+      break
+    end
+  end
+end
+
+global game: GameState = {
+  characters = {
+    Character.init( 32,  32, 1),
+    Character.init( 32, 112, 1),
+    Character.init(112,  32, 2),
+    Character.init(112, 112, 2)
+  },
+  walls = {
+    Hitbox{  32,  16, 16,  8 },
+    Hitbox{  48,  16,  8, 64 },
+
+    Hitbox{  72,  80-32,  8,  8 },
+    Hitbox{  72,  80-4 ,  8,  8 },
+    Hitbox{  72,  80+32,  8,  8 },
+
+    Hitbox{ 112, 136, 16,  8 },
+    Hitbox{ 104,  80,  8, 64 },
+  }
+}
+
+-- game logic --
+
+function Character:set_state(state: CharacterState)
+  self.frames_on_state = 0
+  self.state = state
+end
+
+function Character:update(idx: byte)
+  self.frames_on_state = self.frames_on_state + 1
+
+  if self.state == CharacterState.Attacking and self.frames_on_state > 6 then
+    self:set_state(CharacterState.Idle)
+  end
+
+  check(self.controller == 1 or self.controller == 2, 'invalid controller')
+  local gamepad = self.controller == 1 and $GAMEPAD1 or $GAMEPAD2
+
+  if self.state ~= CharacterState.Attacking then
+    if gamepad & (BUTTON_RIGHT | BUTTON_LEFT | BUTTON_UP | BUTTON_DOWN | BUTTON_1) == 0 then
+      self:set_state(CharacterState.Idle)
+
+    elseif gamepad & BUTTON_1 ~= 0 then
+      self:set_state(CharacterState.Attacking)
+      game:player_try_hit(self)
+
+    else
+      self:set_state(CharacterState.Walking)
+
+      local can_move = true
+
+      if idx % 2 == 0 then
+        local hb = self.hb_receiver
+        hb.x, hb.y, hb.w, hb.h = hb.x - 4, hb.y - 4, hb.w + 8, hb.h + 8
+        can_move = not (hb:get_intersection_with_offsets(self.pos, game.characters[idx+1].hb_receiver, game.characters[idx+1].pos))
+      end
+
+      if can_move then
+        if gamepad & BUTTON_RIGHT ~= 0 then
+          self.pos.x = self.pos.x + 1
+          self.hb_attacker = {16, 4, 10, 7}
+        end
+        if gamepad & BUTTON_LEFT ~= 0 then
+          self.pos.x = self.pos.x - 1
+          self.hb_attacker = {-10, 4, 10, 7}
+        end
+        if gamepad & BUTTON_UP ~= 0 then
+          self.pos.y = self.pos.y - 1
+          self.hb_attacker = {4, -10, 7, 10}
+        end
+        if gamepad & BUTTON_DOWN ~= 0 then
+          self.pos.y = self.pos.y + 1
+          self.hb_attacker = {4, 16, 7, 10}
+        end
+      end
+    end
+  end
+end
+
+function Character:draw()
+  local gamepad = self.controller == 1 and $GAMEPAD1 or $GAMEPAD2
+
+  $DRAW_COLORS = 0x1220
+  rect(self.hb_receiver.x + self.pos.x, self.hb_receiver.y + self.pos.y, self.hb_receiver.w, self.hb_receiver.h)
+
+  if self.state == CharacterState.Attacking then
+    $DRAW_COLORS = 0x1232
+    rect(self.hb_attacker.x + self.pos.x, self.hb_attacker.y + self.pos.y, self.hb_attacker.w, self.hb_attacker.h)
+  end
+end
+
+-- game loop --
+
+function GameState:update()
+  -- update --
+
+  for i = 0, < #self.characters do
+    self.characters[i]:update(i)
+  end
+
+  -- draw --
+
+  $DRAW_COLORS = 0x0040
+  rect(16, 16, (160-16*2), (160-16*2))
+
+  for i = 0, < #self.walls do
+    draw_hitbox(self.walls[i])
+  end
+
+  for i = 0, < #self.walls do
+    for j = 0, < #self.characters do
+      self.walls[i]:simple_collision(self.characters[j].hb_receiver, self.characters[j].pos)
+    end
+  end
+
+  for i = 0, < #self.characters do
+    self.characters[i]:draw()
+  end
+end
+
+
+local function update()
+  game:update()
 end
 
 ## setup_wasm4_callbacks(update)
