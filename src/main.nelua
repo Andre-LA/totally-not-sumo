@@ -8,9 +8,19 @@
 ## primtypes.integer = primtypes.int32
 ## primtypes.number = primtypes.float32
 
+local math = require 'math'
+
 -- require WASM-4 global API
 require 'wasm4'
-local math = require 'math'
+
+PALETTE[0] = 0x8bac0f
+PALETTE[1] = 0x306230
+PALETTE[2] = 0x0f380f
+
+PALETTE[3] = 0x7c3f58
+
+
+local spritesheet = require 'src.spritesheet'
 
 -- utility to track the size of each record
 ##[[
@@ -122,8 +132,13 @@ function Hitbox:simple_collision(entity_hb_o: Hitbox, entity_pos: *Vec2): boolea
   return is_intersecting
 end
 
-local function draw_hitbox(hb: *Hitbox)
-  $DRAW_COLORS = 0x0033
+local function draw_hitbox(hb: *Hitbox, draw_colors: facultative(decltype($DRAW_COLORS)))
+  ## if draw_colors.type.is_niltype then
+    $DRAW_COLORS = 0x0033
+  ## else
+    $DRAW_COLORS = draw_colors
+  ## end
+
   rect(hb.x, hb.y, hb.w, hb.h)
 end
 
@@ -136,19 +151,41 @@ local CharacterState = @enum(byte){
 local Character = @record{
   hb_receiver: Hitbox,
   hb_attacker: Hitbox,
+  hb_ground: Hitbox,
   pos: Vec2,
+  frame: Vec2,
   frames_on_state: int32,
   state: CharacterState,
+  flip: record{ x: boolean },
   health_pts: int8,
   controller: byte,
 }
 ## log_size(Character)
 
+function Character.hb_attacker_right(): Hitbox
+  return Hitbox{16, 4, 15, 11}
+end
+
+function Character.hb_attacker_left(): Hitbox
+  return Hitbox{-15, 4, 15, 11}
+end
+
+function Character.hb_attacker_up(): Hitbox
+  return Hitbox{-1, -6, 11, 15}
+end
+
+function Character.hb_attacker_down(): Hitbox
+  return Hitbox{6, 12, 11, 15}
+end
+
+
 function Character.init(x: int16, y: int16, controller: byte): Character
   return Character{
     pos = { =x, =y },
-    hb_receiver = { 2,  2, 12, 12},
-    hb_attacker = controller == 1 and Hitbox{16, 4, 10, 7} or Hitbox{-10, 4, 10, 7},
+    hb_receiver = { 2, 4, 12, 12},
+    hb_ground = { 4, 12, 8, 8},
+    hb_attacker = controller == 1 and Character.hb_attacker_right() or Character.hb_attacker_left(),
+    flip = { x = controller == 2 },
     =controller,
   }
 end
@@ -159,21 +196,36 @@ function Character:attacked_by(attacker: *Character)
   local diff = self_hb_center - attacker_hb_center
 
   if math.abs(diff.x) > math.abs(diff.y) then
-    self.pos.x = self.pos.x + 16 * math.sign(diff.x)
+    self.pos.x = self.pos.x + 8 * math.sign(diff.x)
   else
-    self.pos.y = self.pos.y + 16 * math.sign(diff.y)
+    self.pos.y = self.pos.y + 8 * math.sign(diff.y)
   end
 end
 
 -- game state --
 
+local arena_border <comptime> = 1
+
 local GameState = @record{
+  arena: Hitbox,
+  frame_counter: uint32,
+  points: [2]byte,
+  winner_player: byte,
+  on_transition: boolean,
+  transition_frame: uint32,
   characters: [4]Character,
   walls: [16]Hitbox, -- TODO: clean unnecessary walls
   prev_gamepad1: decltype($GAMEPAD1),
   prev_gamepad2: decltype($GAMEPAD2),
 }
 ## log_size(GameState)
+
+function GameState:player_wins(idx: byte)
+  self.points[idx] = self.points[idx] + 1
+  self.on_transition = true
+  self.transition_frame = self.frame_counter
+  self.winner_player = idx
+end
 
 function GameState:player_try_hit(attacker: *Character)
   for i = 0, < #self.characters do
@@ -184,25 +236,50 @@ function GameState:player_try_hit(attacker: *Character)
   end
 end
 
-global game: GameState = {
-  characters = {
-    Character.init( 32,  32, 1),
-    Character.init( 32, 112, 1),
-    Character.init(112,  32, 2),
-    Character.init(112, 112, 2)
-  },
-  walls = {
-    Hitbox{  32,  16, 16,  8 },
-    Hitbox{  48,  16,  8, 64 },
+function GameState:check_out(idx: byte): boolean
+  local c_hb = self.characters[idx].hb_ground:with_offset(self.characters[idx].pos)
+  return not (self.arena:get_intersection(c_hb))
+end
 
-    Hitbox{  72,  80-32,  8,  8 },
-    Hitbox{  72,  80-4 ,  8,  8 },
-    Hitbox{  72,  80+32,  8,  8 },
+function GameState:reset_level()
+  local points = self.points
 
-    Hitbox{ 112, 136, 16,  8 },
-    Hitbox{ 104,  80,  8, 64 },
+  $self = {
+    arena = { 16 + arena_border, 16 + arena_border, (160 - 16*2 - arena_border*2), (160 - 16*2 - arena_border*2) },
+    =points,
+    characters = {
+      Character.init( 32,  32, 1),
+      Character.init( 32, 104, 1),
+      Character.init(112,  32, 2),
+      Character.init(112, 104, 2)
+    },
+    walls = {
+      Hitbox{  16,  16, 32,  8 },
+      Hitbox{  16,  24, 8,  16 },
+
+      Hitbox{  48,  16,  8, 64 },
+
+      Hitbox{  76,  80-32-8,  8,  8 },
+      Hitbox{  76,  80-4 ,  8,  8 },
+      Hitbox{  76,  80+32,  8,  8 },
+
+      Hitbox{  48,  80+16,  8,  8 },
+      Hitbox{  104, 80-16-8,  8,  8 },
+
+      Hitbox{ 112, 136, 32,  8 },
+      Hitbox{ 136, 120, 8,  16 },
+
+      Hitbox{ 104,  80,  8, 64 },
+    },
   }
-}
+end
+
+function GameState:transition(idx: byte)
+
+end
+
+global game: GameState
+game:reset_level()
 
 -- game logic --
 
@@ -214,8 +291,21 @@ end
 function Character:update(idx: byte)
   self.frames_on_state = self.frames_on_state + 1
 
-  if self.state == CharacterState.Attacking and self.frames_on_state > 6 then
+  local ms_per_frame <comptime> = 120
+
+  if game.frame_counter % (60//(1000/ms_per_frame)) == 0 then
+    self.frame.x = (self.frame.x + 1) % 6
+  end
+
+  if self.state == CharacterState.Attacking and self.frame.x == 3 then
     self:set_state(CharacterState.Idle)
+    self.frame.x = 0
+
+    switch self.frame.y do
+      case 2, 3, 7 then self.frame.y = 2
+      case 4, 5, 8 then self.frame.y = 4
+      else self.frame.y = 0
+    end
   end
 
   check(self.controller == 1 or self.controller == 2, 'invalid controller')
@@ -225,9 +315,23 @@ function Character:update(idx: byte)
     if gamepad & (BUTTON_RIGHT | BUTTON_LEFT | BUTTON_UP | BUTTON_DOWN | BUTTON_1) == 0 then
       self:set_state(CharacterState.Idle)
 
+      switch self.frame.y do
+        case 2, 3, 7 then self.frame.y = 2
+        case 4, 5, 8 then self.frame.y = 4
+        else self.frame.y = 0
+      end
+
     elseif gamepad & BUTTON_1 ~= 0 then
       self:set_state(CharacterState.Attacking)
       game:player_try_hit(self)
+      self.frame.x = 0
+
+      switch self.frame.y do
+        case 0, 1 then self.frame.y = 6
+        case 2, 3 then self.frame.y = 7
+        case 4, 5 then self.frame.y = 8
+        else self.frame.y = 6
+      end
 
     else
       self:set_state(CharacterState.Walking)
@@ -237,40 +341,98 @@ function Character:update(idx: byte)
       if idx % 2 == 0 then
         local hb = self.hb_receiver
         hb.x, hb.y, hb.w, hb.h = hb.x - 4, hb.y - 4, hb.w + 8, hb.h + 8
-        can_move = not (hb:get_intersection_with_offsets(self.pos, game.characters[idx+1].hb_receiver, game.characters[idx+1].pos))
+        local is_out = game:check_out(idx+1)
+        local is_near = (hb:get_intersection_with_offsets(self.pos, game.characters[idx+1].hb_receiver, game.characters[idx+1].pos))
+        can_move = is_out and true or not is_near
       end
 
       if can_move then
         if gamepad & BUTTON_RIGHT ~= 0 then
           self.pos.x = self.pos.x + 1
-          self.hb_attacker = {16, 4, 10, 7}
+          self.hb_attacker = Character.hb_attacker_right()
+          self.frame.y = 1
+          self.flip.x = false
         end
         if gamepad & BUTTON_LEFT ~= 0 then
           self.pos.x = self.pos.x - 1
-          self.hb_attacker = {-10, 4, 10, 7}
+          self.hb_attacker = Character.hb_attacker_left()
+          self.frame.y = 1
+          self.flip.x = true
         end
         if gamepad & BUTTON_UP ~= 0 then
           self.pos.y = self.pos.y - 1
-          self.hb_attacker = {4, -10, 7, 10}
+          self.hb_attacker = Character.hb_attacker_up()
+          self.frame.y = 5
+          self.flip.x = false
         end
         if gamepad & BUTTON_DOWN ~= 0 then
           self.pos.y = self.pos.y + 1
-          self.hb_attacker = {4, 16, 7, 10}
+          self.hb_attacker = Character.hb_attacker_down()
+          self.frame.y = 3
+          self.flip.x = false
         end
       end
     end
   end
 end
 
-function Character:draw()
-  local gamepad = self.controller == 1 and $GAMEPAD1 or $GAMEPAD2
+function Character:draw(idx: byte)
+  $DRAW_COLORS = self.controller == 1  and 0x1230 or 0x2130
 
-  $DRAW_COLORS = 0x1220
-  rect(self.hb_receiver.x + self.pos.x, self.hb_receiver.y + self.pos.y, self.hb_receiver.w, self.hb_receiver.h)
+  local function draw_attack(self: *Character)
+    local frame_y, offset_x, offset_y = self.frame.y, 0, 0
 
-  if self.state == CharacterState.Attacking then
-    $DRAW_COLORS = 0x1232
-    rect(self.hb_attacker.x + self.pos.x, self.hb_attacker.y + self.pos.y, self.hb_attacker.w, self.hb_attacker.h)
+    switch frame_y do
+      case 0, 1, 6 then frame_y = 9 offset_y = -6
+      case 2, 3, 7 then frame_y = 10 offset_x = -3 offset_y = -2
+      case 4, 5, 8 then frame_y = 11 offset_x = -3
+    end
+
+    if frame_y == 9 then
+      if self.flip.x then
+        offset_x = 0
+      end
+    end
+
+
+    blitSub(
+      spritesheet.data,
+      self.hb_attacker.x + self.pos.x + offset_x, self.hb_attacker.y + self.pos.y + offset_y,
+      16, 20,
+      16 * self.frame.x, 20 * frame_y,
+      spritesheet.width,
+      spritesheet.flags | (self.flip.x and BLIT_FLIP_X or 0)
+    )
+  end
+
+  if game:check_out(idx) then
+    blitSub(
+      spritesheet.data,
+      self.pos.x, self.pos.y,
+      16, 20,
+      (16 * 3), (20 * 9),
+      spritesheet.width,
+      spritesheet.flags
+    )
+  else
+    local attack_is_up = self.frame.y == 4 or self.frame.y == 5 or self.frame.y == 8
+
+    if attack_is_up and self.state == CharacterState.Attacking then
+      draw_attack(self)
+    end
+
+    blitSub(
+      spritesheet.data,
+      self.pos.x, self.pos.y,
+      16, 20,
+      16 * self.frame.x, 20 * self.frame.y,
+      spritesheet.width,
+      spritesheet.flags | (self.flip.x and BLIT_FLIP_X or 0)
+    )
+
+    if not attack_is_up and self.state == CharacterState.Attacking then
+      draw_attack(self)
+    end
   end
 end
 
@@ -278,31 +440,81 @@ end
 
 function GameState:update()
   -- update --
+  self.frame_counter = self.frame_counter + 1
 
-  for i = 0, < #self.characters do
-    self.characters[i]:update(i)
+  if not self.on_transition then
+    for i = 0, < #self.characters do
+      if not self:check_out(i) then
+        self.characters[i]:update(i)
+      end
+    end
+
+    if self:check_out(0) and self:check_out(1) then
+      game:player_wins(1)
+    elseif self:check_out(2) and self:check_out(3) then
+      game:player_wins(0)
+    end
+  elseif self.frame_counter - self.transition_frame > 120 then
+    game:reset_level()
   end
 
   -- draw --
 
-  $DRAW_COLORS = 0x0040
-  rect(16, 16, (160-16*2), (160-16*2))
+  $DRAW_COLORS = 0x0003
+  rect(0, 0, 160, 160)
+
+  $DRAW_COLORS = 0x0022
+  rect(
+    game.arena.x - arena_border,
+    game.arena.y - arena_border,
+    game.arena.w + (arena_border*2),
+    game.arena.h + (arena_border*2)
+  )
+
+  $DRAW_COLORS = 0x0030
+  rect(
+    game.arena.x,
+    game.arena.y,
+    game.arena.w,
+    game.arena.h
+  )
 
   for i = 0, < #self.walls do
-    draw_hitbox(self.walls[i])
+    draw_hitbox(self.walls[i], 0x0011)
   end
 
   for i = 0, < #self.walls do
     for j = 0, < #self.characters do
-      self.walls[i]:simple_collision(self.characters[j].hb_receiver, self.characters[j].pos)
+      self.walls[i]:simple_collision(self.characters[j].hb_ground, self.characters[j].pos)
     end
   end
 
   for i = 0, < #self.characters do
-    self.characters[i]:draw()
+    self.characters[i]:draw(i)
+  end
+
+  do
+    local spts1 <close>, spts2  <close> = tostring(game.points[0]), tostring(game.points[1])
+
+    $DRAW_COLORS = 0x0001
+    text(spts1, 2, 2)
+    text(spts2, 160-18, 2)
+
+    if self.on_transition then
+      local fdiff = self.frame_counter - self.transition_frame
+
+      $DRAW_COLORS = 0x0003
+      local rw <comptime> = (160-24*2)
+      rect(24, 68, math.min(math.ifloor((fdiff / 120) * 4 * rw), rw), 16)
+
+
+      $DRAW_COLORS = 0x0001
+      local player_winner <close> = tostring(self.winner_player+1)
+      text('player   wins', 28, 72)
+      text(player_winner, (28 + #[ #'player ' ]# * 8), 72)
+    end
   end
 end
-
 
 local function update()
   game:update()
