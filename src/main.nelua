@@ -1,6 +1,5 @@
---[[ This Source Code Form is subject to the terms of the Mozilla Public
-     License, v. 2.0. If a copy of the MPL was not distributed with this
-     file, You can obtain one at https://mozilla.org/MPL/2.0/. ]]
+-- Copyright (c) 2022, André Luiz Alvares and Leonardo Santos
+-- SPDX-License-Identifier: CC-BY-NC-SA-4.0
 
 -- Disable GC and use 32-bit numbers by default
 ## context.rootpragmas.nogc = true
@@ -16,9 +15,7 @@ require 'wasm4'
 PALETTE[0] = 0x8bac0f
 PALETTE[1] = 0x306230
 PALETTE[2] = 0x0f380f
-
-PALETTE[3] = 0x7c3f58
-
+PALETTE[3] = 0x000000 -- actually unused
 
 local spritesheet = require 'src.spritesheet'
 
