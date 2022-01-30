@@ -4,6 +4,10 @@ _"Totally Not Sumo"_ is definitively not a sumo game, but it's a game where you 
 
 [Play here!](https://origamisword.itch.io/totally-not-sumo)
 
+## Controls
+* Player 1: **Arrows** and **M**
+* Player 2: **ESDF** and **Tab**
+
 <p align="center">
   <img src="https://user-images.githubusercontent.com/8538122/151711964-7c566af1-72c1-4280-8d34-c5186ba855c2.png" alt="game screenshot, 4 players on an square arena with some obstacles">
 </p>
