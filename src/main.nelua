@@ -7,17 +7,10 @@
 ## primtypes.integer = primtypes.int32
 ## primtypes.number = primtypes.float32
 
+-- require Gamecade global API
+local gamercade = require 'gamercade'
+local string = require 'string'
 local math = require 'math'
-
--- require WASM-4 global API
-require 'wasm4'
-
-PALETTE[0] = 0x8bac0f
-PALETTE[1] = 0x306230
-PALETTE[2] = 0x0f380f
-PALETTE[3] = 0x000000 -- actually unused
-
-local spritesheet = require 'src.spritesheet'
 
 -- utility to track the size of each record
 ##[[
@@ -26,8 +19,40 @@ local function log_size(attr)
 end
 ]]
 
--- general types and methods --
+local function rect(colors: uint16, x: int32, y: int32, w: int32, h: int32)
+  local fill_color, outline_color = colors & 0x000f, colors & 0x00f0
 
+  if fill_color ~= 0 then
+    gamercade.rect_filled(gamercade.color_index(fill_color - 1), x + 80, y + 10, w, h)
+  end
+
+  if outline_color ~= 0 then
+    gamercade.rect(gamercade.color_index((outline_color >> 4) - 1), x + 80, y + 10, w, h)
+  end
+end
+
+local function draw_digit(digit: int32, x: int32, y: int32)
+  local gp = gamercade.graphics_parameters(0, 2, digit)
+  gamercade.sprite(gp, (1 << 63), x + 80, y + 10)
+end
+
+local function draw_integer_text(number: float32, x: int32, y: int32)
+  local digits_len = math.floor(math.log(number, 10)) + 1
+  x = math.ifloor(x + (digits_len - 1) * 9)
+
+  for i = 0, < digits_len do
+    local digit = math.ifloor(number % 10)
+    draw_digit(digit, x - i*9, y)
+    number = number / 10
+  end
+end
+
+local function draw_winner_player_text(winner: byte, x: int32, y: int32)
+  local gp = gamercade.graphics_parameters(0, 1, winner)
+  gamercade.sprite(gp, (1<<63), x + 80, y + 10)
+end
+
+-- general types and methods --
 local Vec2 = @record{
   x: int16, y: int16,
 }
@@ -129,14 +154,21 @@ function Hitbox:simple_collision(entity_hb_o: Hitbox, entity_pos: *Vec2): boolea
   return is_intersecting
 end
 
-local function draw_hitbox(hb: *Hitbox, draw_colors: facultative(decltype($DRAW_COLORS)))
-  ## if draw_colors.type.is_niltype then
-    $DRAW_COLORS = 0x0033
-  ## else
-    $DRAW_COLORS = draw_colors
-  ## end
+local function draw_hitbox(hb: *Hitbox, colors: uint16)
+  rect(colors, hb.x, hb.y, hb.w, hb.h)
+end
 
-  rect(hb.x, hb.y, hb.w, hb.h)
+local function draw_sprite(frame: Vec2, pos: Vec2, palette_index: int32, flip_x: facultative(boolean))
+  ## if flip_x.type.is_niltype then
+  local flip_x = 0
+  ## else
+  local flip_x = flip_x and 1 or 0
+  ## end -- local frame: Vec2 = { (16 * 3), (20 * 9) }
+
+  local frame_index = frame.x + (frame.y*6)
+  local gp = gamercade.graphics_parameters(palette_index, 0, frame_index, 0, flip_x)
+
+  gamercade.sprite(gp, (1 << 63), pos.x + 80, pos.y + 10)
 end
 
 -- entities --
@@ -181,8 +213,8 @@ function Character.init(x: int16, y: int16, controller: byte): Character
     pos = { =x, =y },
     hb_receiver = { 2, 4, 12, 12},
     hb_ground = { 4, 12, 8, 8},
-    hb_attacker = controller == 1 and Character.hb_attacker_right() or Character.hb_attacker_left(),
-    flip = { x = controller == 2 },
+    hb_attacker = controller == 0 and Character.hb_attacker_right() or Character.hb_attacker_left(),
+    flip = { x = controller == 1 },
     =controller,
   }
 end
@@ -211,9 +243,7 @@ local GameState = @record{
   on_transition: boolean,
   transition_frame: uint32,
   characters: [4]Character,
-  walls: [16]Hitbox, -- TODO: clean unnecessary walls
-  prev_gamepad1: decltype($GAMEPAD1),
-  prev_gamepad2: decltype($GAMEPAD2),
+  walls: [11]Hitbox,
 }
 ## log_size(GameState)
 
@@ -245,10 +275,10 @@ function GameState:reset_level()
     arena = { 16 + arena_border, 16 + arena_border, (160 - 16*2 - arena_border*2), (160 - 16*2 - arena_border*2) },
     =points,
     characters = {
-      Character.init( 32,  32, 1),
-      Character.init( 32, 104, 1),
-      Character.init(112,  32, 2),
-      Character.init(112, 104, 2)
+      Character.init( 32,  32, 0),
+      Character.init( 32, 104, 0),
+      Character.init(112,  32, 1),
+      Character.init(112, 104, 1)
     },
     walls = {
       Hitbox{  16,  16, 32,  8 },
@@ -269,10 +299,6 @@ function GameState:reset_level()
       Hitbox{ 104,  80,  8, 64 },
     },
   }
-end
-
-function GameState:transition(idx: byte)
-
 end
 
 global game: GameState
@@ -305,11 +331,15 @@ function Character:update(idx: byte)
     end
   end
 
-  check(self.controller == 1 or self.controller == 2, 'invalid controller')
-  local gamepad = self.controller == 1 and $GAMEPAD1 or $GAMEPAD2
+  check(self.controller == 0 or self.controller == 1, 'invalid controller')
 
   if self.state ~= CharacterState.Attacking then
-    if gamepad & (BUTTON_RIGHT | BUTTON_LEFT | BUTTON_UP | BUTTON_DOWN | BUTTON_1) == 0 then
+    if gamercade.button_right_held(self.controller) |
+       gamercade.button_left_held(self.controller)  |
+       gamercade.button_up_held(self.controller)    |
+       gamercade.button_down_held(self.controller)  |
+       gamercade.button_a_held(self.controller) == 0
+    then
       self:set_state(CharacterState.Idle)
 
       switch self.frame.y do
@@ -318,7 +348,7 @@ function Character:update(idx: byte)
         else self.frame.y = 0
       end
 
-    elseif gamepad & BUTTON_1 ~= 0 then
+    elseif gamercade.button_a_held(self.controller) > 0 then
       self:set_state(CharacterState.Attacking)
       game:player_try_hit(self)
       self.frame.x = 0
@@ -344,25 +374,25 @@ function Character:update(idx: byte)
       end
 
       if can_move then
-        if gamepad & BUTTON_RIGHT ~= 0 then
+        if gamercade.button_right_held(self.controller) > 0 then
           self.pos.x = self.pos.x + 1
           self.hb_attacker = Character.hb_attacker_right()
           self.frame.y = 1
           self.flip.x = false
         end
-        if gamepad & BUTTON_LEFT ~= 0 then
+        if gamercade.button_left_held(self.controller) > 0 then
           self.pos.x = self.pos.x - 1
           self.hb_attacker = Character.hb_attacker_left()
           self.frame.y = 1
           self.flip.x = true
         end
-        if gamepad & BUTTON_UP ~= 0 then
+        if gamercade.button_up_held(self.controller) > 0 then
           self.pos.y = self.pos.y - 1
           self.hb_attacker = Character.hb_attacker_up()
           self.frame.y = 5
           self.flip.x = false
         end
-        if gamepad & BUTTON_DOWN ~= 0 then
+        if gamercade.button_down_held(self.controller) > 0 then
           self.pos.y = self.pos.y + 1
           self.hb_attacker = Character.hb_attacker_down()
           self.frame.y = 3
@@ -374,8 +404,6 @@ function Character:update(idx: byte)
 end
 
 function Character:draw(idx: byte)
-  $DRAW_COLORS = self.controller == 1  and 0x1230 or 0x2130
-
   local function draw_attack(self: *Character)
     local frame_y, offset_x, offset_y = self.frame.y, 0, 0
 
@@ -391,26 +419,14 @@ function Character:draw(idx: byte)
       end
     end
 
+    local pos: Vec2 = self.pos + Vec2{ self.hb_attacker.x, self.hb_attacker.y } + Vec2{ offset_x, offset_y }
+    local frame: Vec2 = { self.frame.x, frame_y }
 
-    blitSub(
-      spritesheet.data,
-      self.hb_attacker.x + self.pos.x + offset_x, self.hb_attacker.y + self.pos.y + offset_y,
-      16, 20,
-      16 * self.frame.x, 20 * frame_y,
-      spritesheet.width,
-      spritesheet.flags | (self.flip.x and BLIT_FLIP_X or 0)
-    )
+    draw_sprite(frame, pos, self.controller, self.flip.x)
   end
 
   if game:check_out(idx) then
-    blitSub(
-      spritesheet.data,
-      self.pos.x, self.pos.y,
-      16, 20,
-      (16 * 3), (20 * 9),
-      spritesheet.width,
-      spritesheet.flags
-    )
+    draw_sprite({ 3, 9 }, self.pos, self.controller)
   else
     local attack_is_up = self.frame.y == 4 or self.frame.y == 5 or self.frame.y == 8
 
@@ -418,14 +434,7 @@ function Character:draw(idx: byte)
       draw_attack(self)
     end
 
-    blitSub(
-      spritesheet.data,
-      self.pos.x, self.pos.y,
-      16, 20,
-      16 * self.frame.x, 20 * self.frame.y,
-      spritesheet.width,
-      spritesheet.flags | (self.flip.x and BLIT_FLIP_X or 0)
-    )
+    draw_sprite(self.frame, self.pos, self.controller, self.flip.x)
 
     if not attack_is_up and self.state == CharacterState.Attacking then
       draw_attack(self)
@@ -454,22 +463,26 @@ function GameState:update()
   elseif self.frame_counter - self.transition_frame > 120 then
     game:reset_level()
   end
+end
 
-  -- draw --
+function GameState:draw()
+  gamercade.clear_screen(gamercade.color_index(2))
 
-  $DRAW_COLORS = 0x0003
-  rect(0, 0, 160, 160)
+  local colors: uint16 = 0x0003
+  rect(colors, 0, 0, 160, 160)
 
-  $DRAW_COLORS = 0x0022
+  local colors: uint16 = 0x0022
   rect(
+    colors,
     game.arena.x - arena_border,
     game.arena.y - arena_border,
     game.arena.w + (arena_border*2),
     game.arena.h + (arena_border*2)
   )
 
-  $DRAW_COLORS = 0x0030
+  local colors: uint16 = 0x0030
   rect(
+    colors,
     game.arena.x,
     game.arena.y,
     game.arena.w,
@@ -491,24 +504,17 @@ function GameState:update()
   end
 
   do
-    local spts1 <close>, spts2  <close> = tostring(game.points[0]), tostring(game.points[1])
-
-    $DRAW_COLORS = 0x0001
-    text(spts1, 2, 2)
-    text(spts2, 160-18, 2)
+    draw_integer_text(game.points[0], 2, 2)
+    draw_integer_text(game.points[1], 160-18, 2)
 
     if self.on_transition then
       local fdiff = self.frame_counter - self.transition_frame
 
-      $DRAW_COLORS = 0x0003
+      local colors: uint16 = 0x0003
       local rw <comptime> = (160-24*2)
-      rect(24, 68, math.min(math.ifloor((fdiff / 120) * 4 * rw), rw), 16)
+      rect(colors, 24, 68, math.min(math.ifloor((fdiff / 120) * 4 * rw), rw), 16)
 
-
-      $DRAW_COLORS = 0x0001
-      local player_winner <close> = tostring(self.winner_player+1)
-      text('player   wins', 28, 72)
-      text(player_winner, (28 + #[ #'player ' ]# * 8), 72)
+      draw_winner_player_text(self.winner_player, 28, 72)
     end
   end
 end
@@ -517,4 +523,9 @@ local function update()
   game:update()
 end
 
-## setup_wasm4_callbacks(update)
+local function draw()
+  game:draw()
+end
+
+## gamercade.value.setup_gamercade_callbacks(update, draw)
+
