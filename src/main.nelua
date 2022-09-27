@@ -254,8 +254,12 @@ function GameState:player_wins(idx: byte)
   self.winner_player = idx
 end
 
-function GameState:player_try_hit(attacker: *Character)
+function GameState:player_try_hit(attacker: *Character, idx: byte)
   for i = 0, < #self.characters do
+    if i == idx then
+      continue
+    end
+
     if (attacker.hb_attacker:get_intersection_with_offsets(attacker.pos, self.characters[i].hb_receiver, self.characters[i].pos)) then
       self.characters[i]:attacked_by(attacker)
       break
@@ -350,7 +354,7 @@ function Character:update(idx: byte)
 
     elseif gamercade.button_a_held(self.controller) > 0 then
       self:set_state(CharacterState.Attacking)
-      game:player_try_hit(self)
+      game:player_try_hit(self, idx)
       self.frame.x = 0
 
       switch self.frame.y do
@@ -463,6 +467,12 @@ function GameState:update()
   elseif self.frame_counter - self.transition_frame > 120 then
     game:reset_level()
   end
+
+  for i = 0, < #self.walls do
+    for j = 0, < #self.characters do
+      self.walls[i]:simple_collision(self.characters[j].hb_ground, self.characters[j].pos)
+    end
+  end
 end
 
 function GameState:draw()
@@ -491,12 +501,6 @@ function GameState:draw()
 
   for i = 0, < #self.walls do
     draw_hitbox(self.walls[i], 0x0011)
-  end
-
-  for i = 0, < #self.walls do
-    for j = 0, < #self.characters do
-      self.walls[i]:simple_collision(self.characters[j].hb_ground, self.characters[j].pos)
-    end
   end
 
   for i = 0, < #self.characters do

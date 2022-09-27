@@ -63,12 +63,12 @@ local gamercade = @record{}
 ## end
 
 -- Audio: https://gamercade.io/docs/api-reference/audio
-function gamercade.play_bgm(bgm_index: int32) <cimport 'play_bgm', cattribute'import("play_bgm")'> end
-function gamercade.play_sfx(sfx_index: int32, channel: int32) <cimport 'play_sfx', cattribute'import("play_sfx")'> end
-function gamercade.stop_bgm() <cimport 'stop_bgm', cattribute'import("stop_bgm")'> end
-function gamercade.stop_channel(channel: int32) <cimport 'stop_channel', cattribute'import("stop_channel")'> end
-function gamercade.play_note(note_id: int32, instrument_index: int32, channel: int32) <cimport 'play_note', cattribute'import("play_note")'> end
-function gamercade.play_frequency(frequency: float32, instrument_index: int32, channel: int32) <cimport 'play_frequency', cattribute'import("play_frequency")'> end
+function gamercade.play_bgm(bgm_index: int32) <cimport 'play_bgm', cattribute'import_name("play_bgm")'> end
+function gamercade.play_sfx(sfx_index: int32, channel: int32) <cimport 'play_sfx', cattribute'import_name("play_sfx")'> end
+function gamercade.stop_bgm() <cimport 'stop_bgm', cattribute'import_name("stop_bgm")'> end
+function gamercade.stop_channel(channel: int32) <cimport 'stop_channel', cattribute'import_name("stop_channel")'> end
+function gamercade.play_note(note_id: int32, instrument_index: int32, channel: int32) <cimport 'play_note', cattribute'import_name("play_note")'> end
+function gamercade.play_frequency(frequency: float32, instrument_index: int32, channel: int32) <cimport 'play_frequency', cattribute'import_name("play_frequency")'> end
 
 -- Data: https://gamercade.io/docs/api-reference/data
 function gamercade.height(): int32 <cimport 'height', cattribute'import_name("height")'> end
@@ -169,7 +169,26 @@ function gamercade.analog_right_x(player_id: int32): float32 <cimport 'analog_ri
 function gamercade.analog_right_y(player_id: int32): float32 <cimport 'analog_right_y', cattribute'import_name("analog_right_y")'> end
 function gamercade.trigger_left(player_id: int32): float32 <cimport 'trigger_left', cattribute'import_name("trigger_left")'> end
 function gamercade.trigger_right(player_id: int32): float32 <cimport 'trigger_right', cattribute'import_name("trigger_right")'> end
-function gamercade.raw_input_state(played_id: int32): int64 <cimport 'raw_input_state', cattribute'import_name("raw_input_state")'> end
+function gamercade.mouse_left_pressed(player_id: int32): int32 <cimport 'mouse_left_pressed', cattribute'import_name("mouse_left_pressed")'> end
+function gamercade.mouse_left_released(player_id: int32): int32 <cimport 'mouse_left_released', cattribute'import_name("mouse_left_released")'> end
+function gamercade.mouse_left_held(player_id: int32): int32 <cimport 'mouse_left_held', cattribute'import_name("mouse_left_held")'> end
+function gamercade.mouse_right_pressed(player_id: int32): int32 <cimport 'mouse_right_pressed', cattribute'import_name("mouse_right_pressed")'> end
+function gamercade.mouse_right_released(player_id: int32): int32 <cimport 'mouse_right_released', cattribute'import_name("mouse_right_released")'> end
+function gamercade.mouse_right_held(player_id: int32): int32 <cimport 'mouse_right_held', cattribute'import_name("mouse_right_held")'> end
+function gamercade.mouse_middle_pressed(player_id: int32): int32 <cimport 'mouse_middle_pressed', cattribute'import_name("mouse_middle_pressed")'> end
+function gamercade.mouse_middle_released(player_id: int32): int32 <cimport 'mouse_middle_released', cattribute'import_name("mouse_middle_released")'> end
+function gamercade.mouse_middle_held(player_id: int32): int32 <cimport 'mouse_middle_held', cattribute'import_name("mouse_middle_held")'> end
+function gamercade.mouse_x_pos(player_id: int32): int32 <cimport 'mouse_x_pos', cattribute'import_name("mouse_x_pos")'> end
+function gamercade.mouse_y_pos(player_id: int32): int32 <cimport 'mouse_y_pos', cattribute'import_name("mouse_y_pos")'> end
+function gamercade.mouse_x_delta(player_id: int32): int32 <cimport 'mouse_x_delta', cattribute'import_name("mouse_x_delta")'> end
+function gamercade.mouse_y_delta(player_id: int32): int32 <cimport 'mouse_y_delta', cattribute'import_name("mouse_y_delta")'> end
+function gamercade.mouse_wheel_up(player_id: int32): int32 <cimport 'mouse_wheel_up', cattribute'import_name("mouse_wheel_up")'> end
+function gamercade.mouse_wheel_down(player_id: int32): int32 <cimport 'mouse_wheel_down', cattribute'import_name("mouse_wheel_down")'> end
+function gamercade.mouse_wheel_left(player_id: int32): int32 <cimport 'mouse_wheel_left', cattribute'import_name("mouse_wheel_left")'> end
+function gamercade.mouse_wheel_right(player_id: int32): int32 <cimport 'mouse_wheel_right', cattribute'import_name("mouse_wheel_right")'> end
+function gamercade.lock_mouse(locked: int32) <cimport 'lock_mouse', cattribute'import_name("lock_mouse")'> end
+function gamercade.raw_input_state(player_id: int32): int64 <cimport 'raw_input_state', cattribute'import_name("raw_input_state")'> end
+function gamercade.raw_mouse_state(player_id: int32): int64 <cimport 'raw_mouse_state', cattribute'import_name("raw_mouse_state")'> end
 
 -- Multiplayer: https://gamercade.io/docs/api-reference/multiplayer
 function gamercade.num_players(): int32 <cimport 'num_players', cattribute'import_name("num_players")'> end
